@@ -975,6 +975,11 @@ select.select option{background:var(--surface)}
         <label>API Key (X-Api-Key)</label>
         <input class="field input" type="password" id="api-token" placeholder="Tu API Key de ISPKeeper" style="width:100%;background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;color:var(--text);font-family:var(--font);font-size:13px;outline:none"/>
       </div>
+      <div class="field">
+        <label>URL del Proxy (proxy.php)</label>
+        <input type="url" id="api-proxy" placeholder="https://aria.ssservicios.com.ar/proxy.php" style="width:100%;background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;color:var(--text);font-family:var(--font);font-size:13px;outline:none"/>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px">Subí proxy.php a tu hosting y pegá la URL acá. Resuelve el problema de CORS.</div>
+      </div>
       <div style="display:flex;gap:8px;margin-bottom:10px">
         <button class="btn btn-primary" onclick="testApiConnection()" id="api-test-btn">
           <span class="material-icons-round">bolt</span> Probar conexión
@@ -1102,6 +1107,7 @@ select.select option{background:var(--surface)}
 const STATE = {
   loggedIn: false,
   apiUrl: localStorage.getItem('ispk_url') || 'https://api.anatod.ar',
+  proxyUrl: localStorage.getItem('ispk_proxy') || '',
   apiToken: localStorage.getItem('ispk_token') || '',
   clientId: localStorage.getItem('ispk_client_id') || '',
   clientData: null,
@@ -1191,30 +1197,23 @@ function doLogout() {
 /* ══════════════════════════════════════
    ISPKeeper API
 ══════════════════════════════════════ */
-const CORS_PROXY = 'https://corsproxy.io/?url=';
-
 async function apiCall(endpoint) {
-  const base = STATE.apiUrl.replace(/\/$/, '');
-  const targetUrl = base + endpoint;
+  const proxyBase = STATE.proxyUrl || '';
+  let url, headers;
 
-  async function attempt(url, useProxy) {
-    const headers = {
-      'X-Api-Key': STATE.apiToken,
-      'Content-Type': 'application/json',
-    };
-    if (useProxy) headers['x-requested-with'] = 'XMLHttpRequest';
-    const resp = await fetch(url, { headers });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    return resp.json();
+  if (proxyBase) {
+    // Proxy en Render — la API Key está en el servidor, no en el frontend
+    url = proxyBase + '?endpoint=' + encodeURIComponent(endpoint);
+    headers = { 'Content-Type': 'application/json' };
+  } else {
+    // Directo — necesita key
+    url = STATE.apiUrl.replace(/\/$/, '') + endpoint;
+    headers = { 'X-Api-Key': STATE.apiToken, 'Content-Type': 'application/json' };
   }
 
-  try {
-    return await attempt(targetUrl, false);
-  } catch(e) {
-    console.warn('Direct call failed, retrying via CORS proxy:', e.message);
-    const proxiedUrl = CORS_PROXY + encodeURIComponent(targetUrl);
-    return await attempt(proxiedUrl, true);
-  }
+  const resp = await fetch(url, { headers });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  return resp.json();
 }
 
 async function fetchClientData(clientId) {
@@ -1244,7 +1243,6 @@ async function fetchClientData(clientId) {
 }
 
 function renderClientData(c) {
-  // ISPKeeper real field names
   const nombre = (c.cliente_nombre || '').trim();
   const apellido = (c.cliente_apellido || '').trim();
   const name = apellido ? apellido + ' ' + nombre : nombre || 'Cliente';
@@ -1253,13 +1251,20 @@ function renderClientData(c) {
   document.getElementById('profile-name').textContent = name;
   document.getElementById('profile-id').textContent = 'ID: ' + (c.cliente_id || '—');
   document.getElementById('profile-doc').textContent = c.cliente_dnicuit || '—';
-  document.getElementById('profile-email').textContent = c.cliente_email || c.cliente_mail || '—';
-  document.getElementById('profile-phone').textContent = c.cliente_telefono || c.cliente_celular || '—';
+  document.getElementById('profile-email').textContent = c.cliente_envia_mail == 1 ? '✓ Habilitado' : '—';
+  document.getElementById('profile-phone').textContent = c.cliente_telefono_celular || c.cliente_telefono_fijo || '—';
   document.getElementById('profile-address').textContent = c.cliente_domicilioreal || c.cliente_domiciliofiscal || '—';
 
-  // Status — ISPKeeper uses cliente_estado or cliente_habilitado
-  const estado = (c.cliente_estado || (c.cliente_habilitado == 1 ? 'activo' : 'cortado') || 'activo').toString().toLowerCase();
-  updateStatusCard(estado);
+  // Estado real: cortado=Y significa cortado, habilitado=0 también
+  let estado = 'activo';
+  if (c.cliente_cortado === 'Y') {
+    estado = 'cortado';
+  } else if (c.cliente_habilitado == 0) {
+    estado = 'cortado';
+  } else if (c.cliente_meses_atraso > 0 || parseFloat(c.cliente_saldo) > 0) {
+    estado = 'pendiente';
+  }
+  updateStatusCard(estado, c);
 
   const initial = name[0].toUpperCase();
   document.getElementById('avatar-btn').textContent = initial;
@@ -1268,22 +1273,26 @@ function renderClientData(c) {
   document.getElementById('client-json').textContent = JSON.stringify(c, null, 2);
 }
 
-function updateStatusCard(estado) {
+function updateStatusCard(estado, c) {
   const pill = document.getElementById('status-pill-wrap');
   const desc = document.getElementById('status-desc');
   const icon = document.querySelector('#status-card .material-icons-round');
-  if (estado === 'activo' || estado === 'active') {
+  const saldo = c ? parseFloat(c.cliente_saldo || 0) : 0;
+  const meses = c ? parseInt(c.cliente_meses_atraso || 0) : 0;
+
+  if (estado === 'cortado') {
+    pill.innerHTML = '<div class="status-pill status-cut"><div class="dot"></div><span>Cortado</span></div>';
+    desc.textContent = 'Servicio suspendido por falta de pago. Abonás tu deuda para restablecer.';
+    icon.textContent = 'cancel'; icon.style.color = 'var(--red)';
+  } else if (estado === 'pendiente') {
+    pill.innerHTML = '<div class="status-pill status-pending"><div class="dot"></div><span>Deuda pendiente</span></div>';
+    const msg = meses > 0 ? meses + ' mes' + (meses > 1 ? 'es' : '') + ' de atraso' : 'Saldo: $' + saldo.toLocaleString('es-AR');
+    desc.textContent = msg + '. Abonás para evitar la suspensión del servicio.';
+    icon.textContent = 'warning'; icon.style.color = 'var(--amber)';
+  } else {
     pill.innerHTML = '<div class="status-pill status-active"><div class="dot"></div><span>Activo</span></div>';
     desc.textContent = 'Todos tus servicios están operativos.';
     icon.textContent = 'check_circle'; icon.style.color = 'var(--green)';
-  } else if (estado === 'cortado' || estado === 'suspendido') {
-    pill.innerHTML = '<div class="status-pill status-cut"><div class="dot"></div><span>Cortado</span></div>';
-    desc.textContent = 'Servicio suspendido. Contactá soporte o abonás tu deuda.';
-    icon.textContent = 'cancel'; icon.style.color = 'var(--red)';
-  } else if (estado === 'pendiente') {
-    pill.innerHTML = '<div class="status-pill status-pending"><div class="dot"></div><span>Pendiente de pago</span></div>';
-    desc.textContent = 'Tenés una factura pendiente. Abonala para evitar la suspensión.';
-    icon.textContent = 'warning'; icon.style.color = 'var(--amber)';
   }
 }
 
@@ -1301,16 +1310,18 @@ function renderInvoices(data) {
     return;
   }
 
-  // Last invoice (first in list, usually sorted desc)
+  // Last invoice — ISPKeeper real fields
   const last = invoices[0];
-  // ISPKeeper real field names
-  const monto = last.factura_importe || last.monto || last.total || 0;
-  const vencimiento = last.factura_vencimiento || last.vencimiento || last.factura_fecha || '';
-  const periodo = last.factura_periodo || last.periodo || last.factura_mes || last.factura_fecha || '—';
-  const estadoRaw = last.factura_estado || last.estado || '';
-  const estado = estadoRaw.toString().toLowerCase();
-  const isOverdue = estado === 'vencida' || estado === 'impaga' || estado === '2';
-  const isPending = estado === 'pendiente' || estado === 'emitida' || estado === '1' || estado === '';
+  const monto = parseFloat(last.factura_importe || 0);
+  const vencimiento = last.factura_vencimiento || last.factura_fecha || '';
+  const periodo = last.factura_fecha ? last.factura_fecha.substring(0,7) : '—';
+  // factura_tipo: FX=factura, RP=recibo, etc. No hay estado explícito
+  // Determinamos por fecha de vencimiento vs hoy
+  const hoy = new Date();
+  const fechaVenc = vencimiento ? new Date(vencimiento) : null;
+  const isOverdue = fechaVenc && fechaVenc < hoy && monto > 0;
+  const isPending = !isOverdue && monto > 0;
+  const estado = isOverdue ? 'Vencida' : isPending ? 'Pendiente' : 'Pagada';
 
   let alertHtml = '';
   if (isOverdue) alertHtml = `<div class="invoice-alert"><span class="material-icons-round">error</span>Factura vencida — abonás para restablecer el servicio.</div>`;
@@ -1321,15 +1332,15 @@ function renderInvoices(data) {
     <div class="invoice-meta">
       <div class="invoice-meta-item">
         <div class="invoice-meta-label">Período</div>
-        <div class="invoice-meta-val">${periodo}</div>
+        <div class="invoice-meta-val">${last.factura_fecha || "—"}</div>
       </div>
       <div class="invoice-meta-item">
         <div class="invoice-meta-label">Vencimiento</div>
-        <div class="invoice-meta-val">${vencimiento || '—'}</div>
+        <div class="invoice-meta-val">${last.factura_vencimiento || "—"}</div>
       </div>
       <div class="invoice-meta-item">
         <div class="invoice-meta-label">Estado</div>
-        <div class="invoice-meta-val" style="color:${isOverdue?'var(--red)':isPending?'var(--amber)':'var(--green)'}">${last.estado || '—'}</div>
+        <div class="invoice-meta-val" style="color:${isOverdue?'var(--red)':isPending?'var(--amber)':'var(--green)'}">${estado}</div>
       </div>
     </div>
     ${alertHtml}
@@ -1341,8 +1352,9 @@ function renderInvoices(data) {
 
   // Full page
   fullContainer.innerHTML = invoices.slice(0,10).map(inv => {
-    const m = inv.factura_importe || inv.monto || inv.total || 0;
-    const est = (inv.factura_estado || inv.estado || '').toString().toLowerCase();
+    const m = parseFloat(inv.factura_importe || 0);
+    const fv = inv.factura_vencimiento ? new Date(inv.factura_vencimiento) : null;
+    const est = fv && fv < new Date() && m > 0 ? 'vencida' : m > 0 ? 'pendiente' : 'pagada';
     const ovrd = est==='vencida'||est==='impaga';
     const pend = est==='pendiente'||est==='emitida';
     return `
@@ -1350,7 +1362,7 @@ function renderInvoices(data) {
       <div class="service-icon internet"><span class="material-icons-round">receipt_long</span></div>
       <div class="service-info">
         <div class="service-name">$${Number(m).toLocaleString('es-AR')}</div>
-        <div class="service-address">Período: ${inv.factura_periodo||inv.factura_fecha||'—'} · Vence: ${inv.factura_vencimiento||'—'}</div>
+        <div class="service-address">Fecha: ${inv.factura_fecha||'—'} · Vence: ${inv.factura_vencimiento||'—'} · Tipo: ${inv.factura_tipo||'—'}</div>
         <div class="service-plan" style="color:${ovrd?'var(--red)':pend?'var(--amber)':'var(--green)'}">${inv.estado||'—'}</div>
       </div>
       <button class="service-detail-btn" onclick="alert('PDF próximamente')">PDF</button>
@@ -1372,16 +1384,16 @@ function renderServices() {
     const tipo = s._type;
     const icons = { internet:'wifi', tv:'tv', phone:'call' };
     const iconEl = `<span class="material-icons-round">${icons[tipo]||'device_hub'}</span>`;
-    // ISPKeeper real field names for connections
+    // ISPKeeper real conexion fields
     const name = tipo==='internet' ? 'Internet' : tipo==='tv' ? 'Televisión' : 'Telefonía';
-    const address = s.conexion_domicilio || s.conexion_direccion || '—';
-    const plan = s.plan_nombre || s.conexion_plan || '—';
+    const address = s.conexion_domicilio || s.conexion_domicilioreal || s.conexion_ip || '—';
+    const plan = s.plan_nombre || (s.conexion_plan ? 'Plan #'+s.conexion_plan : '—');
     const precioVal = s.plan_precio || s.conexion_precio || null;
     const precio = precioVal ? ` · $${Number(precioVal).toLocaleString('es-AR')}` : '';
-    const estadoRaw = s.conexion_estado || s.conexion_habilitada || s.estado || 'activo';
-    const estado = estadoRaw.toString().toLowerCase();
-    const stClass = (estado==='activo'||estado==='1')?'status-active':(estado==='cortado'||estado==='0')?'status-cut':'status-pending';
-    const stLabel = (estado==='1'||estado==='activo') ? 'Activo' : (estado==='0'||estado==='cortado') ? 'Cortado' : 'Pendiente';
+    // conexion_habilitada: 1=activo, 0=cortado
+    const hab = s.conexion_habilitada !== undefined ? s.conexion_habilitada : 1;
+    const stClass = hab == 1 ? 'status-active' : 'status-cut';
+    const stLabel = hab == 1 ? 'Activo' : 'Cortado';
     return `
     <div class="service-item">
       <div class="service-icon ${tipo}">${iconEl}</div>
@@ -1474,10 +1486,13 @@ function loadDemoData() {
 function saveApiConfig() {
   const url = document.getElementById('api-url').value.trim();
   const token = document.getElementById('api-token').value.trim();
+  const proxy = document.getElementById('api-proxy').value.trim();
   STATE.apiUrl = url;
   STATE.apiToken = token;
+  STATE.proxyUrl = proxy;
   localStorage.setItem('ispk_url', url);
   localStorage.setItem('ispk_token', token);
+  localStorage.setItem('ispk_proxy', proxy);
   alert('Configuración guardada.');
 }
 
@@ -1640,6 +1655,7 @@ window.addEventListener('DOMContentLoaded', function() {
   // Populate saved API config
   if (STATE.apiUrl) document.getElementById('api-url').value = STATE.apiUrl;
   if (STATE.apiToken) document.getElementById('api-token').value = STATE.apiToken;
+  if (STATE.proxyUrl) document.getElementById('api-proxy').value = STATE.proxyUrl;
 });
 </script>
 </body>
