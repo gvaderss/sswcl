@@ -534,19 +534,29 @@ select.select option{background:var(--surface)}
 <!-- ─── LOGIN PAGE ─── -->
 <div id="page-login" class="page active">
   <div class="login-logo">S</div>
-  <h1 class="login-title">Bienvenido</h1>
-  <p class="login-sub">Ingresá a tu área de autogestión</p>
+  <h1 class="login-title">Autogestión</h1>
+  <p class="login-sub">Configurá la conexión e ingresá con tu número de cliente</p>
   <div class="login-form">
-    <div class="field">
-      <label>Número de cliente / DNI</label>
-      <input type="text" id="login-user" placeholder="Ej: 12345 o 30123456" autocomplete="username"/>
+
+    <div id="login-step-1">
+      <div class="field">
+        <label>URL del Proxy</label>
+        <input type="url" id="login-proxy" placeholder="https://ispkeeper-proxy.onrender.com/proxy" autocomplete="off"/>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
+        <button class="btn btn-secondary" style="flex:1" onclick="testLoginProxy()">
+          <span class="material-icons-round" style="font-size:16px">bolt</span> Probar conexión
+        </button>
+        <span id="login-proxy-status"></span>
+      </div>
+      <div class="field">
+        <label>Número de cliente</label>
+        <input type="text" id="login-user" placeholder="Ej: 7246" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()"/>
+      </div>
+      <button class="login-btn" onclick="doLogin()">Ingresar</button>
     </div>
-    <div class="field">
-      <label>Contraseña</label>
-      <input type="password" id="login-pass" placeholder="Tu contraseña" autocomplete="current-password"/>
-    </div>
-    <button class="login-btn" onclick="doLogin()">Ingresar</button>
-    <p class="login-footer">¿Problemas para acceder? <a href="#" style="color:var(--accent2)">Contactá soporte</a></p>
+
+    <p class="login-footer">¿Problemas para acceder? <a href="#" style="color:var(--accent2)" onclick="showPage('soporte')">Contactá soporte</a></p>
   </div>
 </div>
 
@@ -1051,9 +1061,7 @@ select.select option{background:var(--surface)}
     <button class="btn btn-secondary" style="width:100%;margin-bottom:8px" onclick="saveApiConfig()">
       <span class="material-icons-round">save</span> Guardar configuración
     </button>
-    <button class="btn btn-ghost" style="width:100%" onclick="loadDemoData()">
-      <span class="material-icons-round">data_object</span> Cargar datos de demo
-    </button>
+
   </div><!-- /config -->
 
 </div><!-- /app-shell -->
@@ -1153,34 +1161,52 @@ function showPage(page) {
 /* ══════════════════════════════════════
    LOGIN
 ══════════════════════════════════════ */
+async function testLoginProxy() {
+  const proxy = document.getElementById('login-proxy').value.trim();
+  const statusEl = document.getElementById('login-proxy-status');
+  if (!proxy) { alert('Ingresá la URL del proxy.'); return; }
+  statusEl.innerHTML = '<div class="spinner"></div>';
+  try {
+    const resp = await fetch(proxy + '?endpoint=' + encodeURIComponent('/api/clientes'));
+    const data = await resp.json();
+    if (data.data) {
+      statusEl.innerHTML = '<span class="chip ok">&#x2713; OK</span>';
+      STATE.proxyUrl = proxy;
+      localStorage.setItem('ispk_proxy', proxy);
+    } else {
+      statusEl.innerHTML = '<span class="chip err">&#x2717; Error</span>';
+    }
+  } catch(e) {
+    statusEl.innerHTML = '<span class="chip err">&#x2717; Sin conexión</span>';
+  }
+}
+
 function doLogin() {
   const user = document.getElementById('login-user').value.trim();
-  const pass = document.getElementById('login-pass').value.trim();
-  if (!user) { alert('Ingresá tu número de cliente o DNI.'); return; }
+  const proxy = document.getElementById('login-proxy').value.trim();
+  if (!user) { alert('Ingresá tu número de cliente.'); return; }
+  if (!proxy && !STATE.proxyUrl) { alert('Ingresá la URL del proxy primero.'); return; }
 
-  // Hide login, show app chrome
-  document.getElementById('topbar').style.display = 'flex';
-  document.getElementById('app-shell').style.display = 'block';
-  document.getElementById('bottom-nav').style.display = 'flex';
+  // Save proxy
+  if (proxy) {
+    STATE.proxyUrl = proxy;
+    localStorage.setItem('ispk_proxy', proxy);
+  }
 
   STATE.loggedIn = true;
   STATE.clientId = user;
 
-  // Set avatar initial
+  // Show app
+  document.getElementById('topbar').style.display = 'flex';
+  document.getElementById('app-shell').style.display = 'block';
+  document.getElementById('bottom-nav').style.display = 'flex';
+
   const initial = user[0].toUpperCase();
   document.getElementById('avatar-btn').textContent = initial;
   document.getElementById('profile-avatar').textContent = initial;
 
   showPage('inicio');
-
-  // Use proxy if configured, direct if token present, else demo
-  if (STATE.proxyUrl) {
-    fetchClientData(user);  // user = client ID entered at login
-  } else if (STATE.apiUrl && STATE.apiToken) {
-    fetchClientData(user);
-  } else {
-    loadDemoData();
-  }
+  fetchClientData(user);
 }
 
 function doLogout() {
@@ -1188,12 +1214,11 @@ function doLogout() {
   document.getElementById('topbar').style.display = 'none';
   document.getElementById('app-shell').style.display = 'none';
   document.getElementById('bottom-nav').style.display = 'none';
-  // Hide all pages then show login
   document.querySelectorAll('.page').forEach(function(p) {
     p.classList.remove('active');
   });
   document.getElementById('page-login').classList.add('active');
-  document.getElementById('login-pass').value = '';
+  document.getElementById('login-user').value = '';
 }
 
 /* ══════════════════════════════════════
@@ -1241,7 +1266,7 @@ async function fetchClientData(clientId) {
 
   } catch(e) {
     console.error('API error:', e);
-    loadDemoData();
+    console.warn("Demo data disabled");
   }
 }
 
@@ -1445,58 +1470,7 @@ function renderServices() {
 /* ══════════════════════════════════════
    DEMO DATA
 ══════════════════════════════════════ */
-function loadDemoData() {
-  const demo = {
-    id: 1042,
-    nombre: 'Juan Pérez',
-    documento: '30.123.456',
-    email: 'juan.perez@email.com',
-    telefono: '351 555-0142',
-    direccion: 'Av. Colón 1234, Córdoba',
-    estado: 'activo',
-  };
-  renderClientData(demo);
-
-  const invoicesDemo = [{
-    periodo: 'Marzo 2025',
-    monto: 8500,
-    vencimiento: '25/03/2025',
-    estado: 'Pendiente',
-    mes: 'Mar 2025',
-  },{
-    periodo: 'Febrero 2025',
-    monto: 8500,
-    vencimiento: '25/02/2025',
-    estado: 'Pagada',
-    mes: 'Feb 2025',
-  },{
-    periodo: 'Enero 2025',
-    monto: 7800,
-    vencimiento: '25/01/2025',
-    estado: 'Pagada',
-    mes: 'Ene 2025',
-  }];
-  renderInvoices(invoicesDemo);
-
-  STATE.servicesData = {
-    internet: [{
-      _type:'internet', nombre:'Internet Hogar',
-      direccion:'Av. Colón 1234, Córdoba',
-      plan:'Plan Fibra 300 Mbps', precio: 6500, estado:'activo',
-    }],
-    tv: [{
-      _type:'tv', nombre:'Televisión Digital',
-      direccion:'Av. Colón 1234, Córdoba',
-      plan:'Pack Completo HD', precio: 2000, estado:'activo',
-    }],
-    phone: [{
-      _type:'phone', nombre:'Telefonía Fija',
-      direccion:'Av. Colón 1234, Córdoba',
-      plan:'Plan Residencial', precio: 0, estado:'activo',
-    }],
-  };
-  renderServices();
-}
+// Demo data removed
 
 /* ══════════════════════════════════════
    API CONFIG PAGE
@@ -1657,7 +1631,13 @@ window.addEventListener('DOMContentLoaded', function() {
   });
   document.getElementById('page-login').classList.add('active');
 
-  // Populate saved API config
+  // Pre-fill proxy URL if saved
+  const savedProxy = localStorage.getItem('ispk_proxy') || '';
+  if (savedProxy) {
+    document.getElementById('login-proxy').value = savedProxy;
+    STATE.proxyUrl = savedProxy;
+  }
+  // Populate API config tab fields
   if (STATE.apiUrl) document.getElementById('api-url').value = STATE.apiUrl;
   if (STATE.apiToken) document.getElementById('api-token').value = STATE.apiToken;
   if (STATE.proxyUrl) document.getElementById('api-proxy').value = STATE.proxyUrl;
