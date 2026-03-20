@@ -1304,7 +1304,9 @@ function updateStatusCard(estado, c) {
 ══════════════════════════════════════ */
 function renderInvoices(data) {
   STATE.invoiceData = data;
-  const invoices = Array.isArray(data) ? data : (data.data || []);
+  // Filter out cancelled invoices (factura_anulada = 1)
+  const allInvoices = Array.isArray(data) ? data : (data.data || []);
+  const invoices = allInvoices.filter(f => !f.factura_anulada || f.factura_anulada == 0);
   const container = document.getElementById('invoice-content');
   const fullContainer = document.getElementById('invoices-full-content');
 
@@ -1316,7 +1318,7 @@ function renderInvoices(data) {
   // Last invoice — ISPKeeper real fields
   const last = invoices[0];
   const monto = parseFloat(last.factura_importe || 0);
-  const vencimiento = last.factura_vencimiento || last.factura_fecha || '';
+  const vencimiento = last.factura_1vencimiento || last.factura_vencimiento || last.factura_fecha || '';
   const periodo = last.factura_fecha ? last.factura_fecha.substring(0,7) : '—';
   // factura_tipo: FX=factura, RP=recibo, etc. No hay estado explícito
   // Determinamos por fecha de vencimiento vs hoy
@@ -1339,7 +1341,7 @@ function renderInvoices(data) {
       </div>
       <div class="invoice-meta-item">
         <div class="invoice-meta-label">Vencimiento</div>
-        <div class="invoice-meta-val">${last.factura_vencimiento || "—"}</div>
+        <div class="invoice-meta-val">${last.factura_1vencimiento || last.factura_vencimiento || '—'}</div>
       </div>
       <div class="invoice-meta-item">
         <div class="invoice-meta-label">Estado</div>
@@ -1356,7 +1358,7 @@ function renderInvoices(data) {
   // Full page
   fullContainer.innerHTML = invoices.slice(0,10).map(inv => {
     const m = parseFloat(inv.factura_importe || 0);
-    const fv = inv.factura_vencimiento ? new Date(inv.factura_vencimiento) : null;
+    const fv = (inv.factura_1vencimiento||inv.factura_vencimiento) ? new Date(inv.factura_1vencimiento||inv.factura_vencimiento) : null;
     const est = fv && fv < new Date() && m > 0 ? 'vencida' : m > 0 ? 'pendiente' : 'pagada';
     const ovrd = est==='vencida'||est==='impaga';
     const pend = est==='pendiente'||est==='emitida';
@@ -1365,7 +1367,7 @@ function renderInvoices(data) {
       <div class="service-icon internet"><span class="material-icons-round">receipt_long</span></div>
       <div class="service-info">
         <div class="service-name">$${Number(m).toLocaleString('es-AR')}</div>
-        <div class="service-address">Fecha: ${inv.factura_fecha||'—'} · Vence: ${inv.factura_vencimiento||'—'} · Tipo: ${inv.factura_tipo||'—'}</div>
+        <div class="service-address">Fecha: ${inv.factura_fecha||'—'} · Vence: ${inv.factura_1vencimiento||inv.factura_vencimiento||'—'} · Tipo: ${inv.factura_tipo||'—'}</div>
         <div class="service-plan" style="color:${ovrd?'var(--red)':pend?'var(--amber)':'var(--green)'}">${inv.estado||'—'}</div>
       </div>
       <button class="service-detail-btn" onclick="alert('PDF próximamente')">PDF</button>
@@ -1387,14 +1389,27 @@ function renderServices() {
     const tipo = s._type;
     const icons = { internet:'wifi', tv:'tv', phone:'call' };
     const iconEl = `<span class="material-icons-round">${icons[tipo]||'device_hub'}</span>`;
-    // ISPKeeper real conexion fields
+    // ISPKeeper real conexion fields — different per service type
     const name = tipo==='internet' ? 'Internet' : tipo==='tv' ? 'Televisión' : 'Telefonía';
-    const address = s.conexion_domicilio || s.conexion_domicilioreal || s.conexion_ip || '—';
-    const plan = s.plan_nombre || (s.conexion_plan ? 'Plan #'+s.conexion_plan : '—');
-    const precioVal = s.plan_precio || s.conexion_precio || null;
-    const precio = precioVal ? ` · $${Number(precioVal).toLocaleString('es-AR')}` : '';
-    // conexion_habilitada: 1=activo, 0=cortado
-    const hab = s.conexion_habilitada !== undefined ? s.conexion_habilitada : 1;
+    let address, plan, precio, hab;
+    if (tipo === 'internet') {
+      address = s.conexion_domicilio || s.conexion_ip || '—';
+      plan = s.plan_nombre || (s.conexion_plan ? 'Plan #'+s.conexion_plan : '—');
+      const precioVal = s.plan_precio || null;
+      precio = precioVal ? ' · $'+Number(precioVal).toLocaleString('es-AR') : '';
+      hab = s.conexion_habilitada !== undefined ? s.conexion_habilitada : 1;
+    } else if (tipo === 'tv') {
+      address = s.television_domicilio || s.conexion_domicilio || '—';
+      plan = s.plan_nombre || (s.television_plan ? 'Plan #'+s.television_plan : '—');
+      precio = '';
+      hab = s.television_habilitada !== undefined ? s.television_habilitada : 1;
+    } else {
+      // telefonia
+      address = s.telefonia_numero_movil || s.telefonia_numero_fijo || '—';
+      plan = s.plan_nombre || (s.telefonia_plan ? 'Plan #'+s.telefonia_plan : '—');
+      precio = '';
+      hab = 1; // telefonia doesn't have explicit habilitada field
+    }
     const stClass = hab == 1 ? 'status-active' : 'status-cut';
     const stLabel = hab == 1 ? 'Activo' : 'Cortado';
     return `
