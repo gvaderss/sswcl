@@ -1500,44 +1500,31 @@ function saveApiConfig() {
 }
 
 async function testApiConnection() {
+  const proxy = document.getElementById('api-proxy').value.trim();
   const url = document.getElementById('api-url').value.trim();
   const token = document.getElementById('api-token').value.trim();
-  if (!url && !STATE.proxyUrl) { alert('Completá la URL del proxy o la URL directa.'); return; }
-  // Save to STATE temporarily for apiCall to use
+  if (!proxy && !url) { alert('Completá la URL del proxy o la URL directa.'); return; }
+
   STATE.apiUrl = url;
   STATE.apiToken = token;
+  STATE.proxyUrl = proxy;
+
   const statusEl = document.getElementById('api-status');
   statusEl.innerHTML = '<div class="spinner"></div>';
 
-  async function tryFetch(fetchUrl, useProxy) {
-    const headers = { 'X-Api-Key': token };
-    if (useProxy) headers['x-requested-with'] = 'XMLHttpRequest';
-    return fetch(fetchUrl, { headers });
-  }
-
-  const directUrl = url.replace(/\/$/, '') + '/api/clientes';
-  const proxyUrl = CORS_PROXY + encodeURIComponent(directUrl);
-
   try {
-    let resp;
-    try {
-      resp = await tryFetch(directUrl, false);
-    } catch(e) {
-      statusEl.innerHTML = '<div class="spinner"></div> <span style="font-size:11px;color:var(--text3)">Reintentando via proxy...</span>';
-      resp = await tryFetch(proxyUrl, true);
-    }
-    if (resp.ok) {
-      statusEl.innerHTML = '<span class="chip ok">✓ Conectado</span>';
-    } else if (resp.status === 401) {
-      statusEl.innerHTML = '<span class="chip err">✗ Token inválido (401)</span>';
+    const data = await apiCall('/api/clientes');
+    if (data && (data.data || Array.isArray(data))) {
+      statusEl.innerHTML = '<span class="chip ok">&#x2713; Conectado</span>';
     } else {
-      statusEl.innerHTML = `<span class="chip err">✗ Error ${resp.status}</span>`;
+      statusEl.innerHTML = '<span class="chip err">&#x2717; Respuesta inesperada</span>';
     }
   } catch(e) {
-    statusEl.innerHTML = '<span class="chip err">✗ Sin conexión</span>';
+    statusEl.innerHTML = '<span class="chip err">&#x2717; ' + e.message + '</span>';
     console.error('API test error:', e);
   }
 }
+
 
 async function searchClient() {
   const q = document.getElementById('client-search-input').value.trim();
