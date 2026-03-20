@@ -1173,8 +1173,10 @@ function doLogin() {
 
   showPage('inicio');
 
-  // Try to load from API if configured, else load demo
-  if (STATE.apiUrl && STATE.apiToken) {
+  // Use proxy if configured, direct if token present, else demo
+  if (STATE.proxyUrl) {
+    fetchClientData(user);
+  } else if (STATE.apiUrl && STATE.apiToken) {
     fetchClientData(user);
   } else {
     loadDemoData();
@@ -1203,7 +1205,8 @@ async function apiCall(endpoint) {
 
   if (proxyBase) {
     // Proxy en Render — la API Key está en el servidor, no en el frontend
-    url = proxyBase + '?endpoint=' + encodeURIComponent(endpoint);
+    const cleanProxy = proxyBase.replace(/\/$/, '');
+    url = cleanProxy + '?endpoint=' + encodeURIComponent(endpoint);
     headers = { 'Content-Type': 'application/json' };
   } else {
     // Directo — necesita key
@@ -1499,7 +1502,7 @@ function saveApiConfig() {
 async function testApiConnection() {
   const url = document.getElementById('api-url').value.trim();
   const token = document.getElementById('api-token').value.trim();
-  if (!url || !token) { alert('Completá URL y token primero.'); return; }
+  if (!url && !STATE.proxyUrl) { alert('Completá la URL del proxy o la URL directa.'); return; }
   // Save to STATE temporarily for apiCall to use
   STATE.apiUrl = url;
   STATE.apiToken = token;
@@ -1540,8 +1543,8 @@ async function searchClient() {
   const q = document.getElementById('client-search-input').value.trim();
   const resultsEl = document.getElementById('client-search-results');
   if (!q) return;
-  if (!STATE.apiUrl || !STATE.apiToken) {
-    resultsEl.innerHTML = '<div class="info-box" style="color:var(--amber)">Configurá la URL y token de API primero.</div>';
+  if (!STATE.proxyUrl && (!STATE.apiUrl || !STATE.apiToken)) {
+    resultsEl.innerHTML = '<div class="info-box" style="color:var(--amber)">Configurá el proxy o la URL+token de API primero.</div>';
     return;
   }
   resultsEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)"><div class="spinner"></div> Buscando...</div>';
