@@ -1175,7 +1175,7 @@ function doLogin() {
 
   // Use proxy if configured, direct if token present, else demo
   if (STATE.proxyUrl) {
-    fetchClientData(user);
+    fetchClientData(user);  // user = client ID entered at login
   } else if (STATE.apiUrl && STATE.apiToken) {
     fetchClientData(user);
   } else {
